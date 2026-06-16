@@ -211,5 +211,27 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     Before writing code, fill in the Tool 3 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    # Defensive guard: no usable outfit to write a caption about.
+    if not outfit or not outfit.strip():
+        return (
+            "Couldn't create a fit card — no outfit suggestion was provided. "
+            f"Here's the item so you can style it yourself: "
+            f"{new_item['title']} — ${new_item['price']:.0f}, {new_item['platform']}."
+        )
+
+    prompt = (
+        "Write a short, casual Instagram/TikTok caption for an outfit post about "
+        "a thrifted find. It should read like a real OOTD post, NOT a product "
+        "description.\n\n"
+        f"Item: {new_item['title']} (${new_item['price']:.0f}, on {new_item['platform']})\n"
+        f"Outfit: {outfit}\n\n"
+        "Rules:\n"
+        "- 2 to 4 sentences.\n"
+        "- Mention the item name, price, and platform once each, naturally.\n"
+        "- Capture the outfit vibe in specific terms.\n"
+        "- Sound authentic and a little playful. Emojis are fine but optional.\n"
+        "Return only the caption text, no preamble or quotation marks."
+    )
+
+    # High temperature so captions vary between runs on the same input.
+    return _chat(prompt, temperature=1.0)

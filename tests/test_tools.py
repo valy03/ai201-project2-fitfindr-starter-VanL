@@ -9,7 +9,7 @@ Run with:  pytest -q
 """
 
 import tools
-from tools import search_listings, suggest_outfit
+from tools import search_listings, suggest_outfit, create_fit_card
 from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
 
 
@@ -130,3 +130,48 @@ def test_suggest_outfit_empty_wardrobe_does_not_crash(monkeypatch):
     assert result.strip() != ""
     # The empty-wardrobe branch asks for general, item-only advice.
     assert "haven't shared their wardrobe" in captured[0]
+
+
+# ── Tool 3: create_fit_card ──────────────────────────────────────────────────
+
+def test_create_fit_card_returns_caption(monkeypatch):
+    """Happy path: returns a non-empty caption string."""
+    _patch_chat(monkeypatch)
+    result = create_fit_card("Pair it with baggy jeans and boots.", SAMPLE_ITEM)
+    assert isinstance(result, str)
+    assert result.strip() != ""
+
+
+def test_create_fit_card_includes_item_details_in_prompt(monkeypatch):
+    """The item name, price, and platform are passed to the LLM."""
+    captured = _patch_chat(monkeypatch)
+    create_fit_card("Pair it with baggy jeans and boots.", SAMPLE_ITEM)
+    prompt = captured[0]
+    assert "Faded Band Tee" in prompt
+    assert "22" in prompt          # price
+    assert "depop" in prompt       # platform
+
+
+def test_create_fit_card_uses_high_temperature(monkeypatch):
+    """Captions should vary between runs — verify a high temperature is used."""
+    temps = []
+
+    def fake_chat(prompt, temperature=0.7):
+        temps.append(temperature)
+        return "caption"
+
+    monkeypatch.setattr(tools, "_chat", fake_chat)
+    create_fit_card("Pair it with baggy jeans and boots.", SAMPLE_ITEM)
+    assert temps[0] >= 0.9
+
+
+def test_create_fit_card_empty_outfit_returns_error_string(monkeypatch):
+    """Failure mode: empty/whitespace outfit returns an error string, no API call."""
+    captured = _patch_chat(monkeypatch)
+    for bad in ["", "   ", "\n\t"]:
+        result = create_fit_card(bad, SAMPLE_ITEM)
+        assert isinstance(result, str)
+        assert result.strip() != ""
+        assert "Faded Band Tee" in result   # item details offered instead
+    # The guard returns before ever calling the LLM.
+    assert captured == []
