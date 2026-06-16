@@ -13,6 +13,7 @@ Tools:
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -20,6 +21,9 @@ from groq import Groq
 from utils.data_loader import load_listings
 
 load_dotenv()
+
+# Default Groq chat model used by the LLM-backed tools.
+_MODEL = "llama-3.3-70b-versatile"
 
 
 # ── Groq client ───────────────────────────────────────────────────────────────
@@ -32,6 +36,17 @@ def _get_groq_client():
             "GROQ_API_KEY not set. Add it to a .env file in the project root."
         )
     return Groq(api_key=api_key)
+
+
+def _chat(prompt: str, temperature: float = 0.7) -> str:
+    """Send a single-turn prompt to the Groq chat model and return the text."""
+    client = _get_groq_client()
+    response = client.chat.completions.create(
+        model=_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+    )
+    return response.choices[0].message.content.strip()
 
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
@@ -69,8 +84,35 @@ def search_listings(
 
     Before writing code, fill in the Tool 1 section of planning.md.
     """
-    # Replace this with your implementation
-    return []
+    listings = load_listings()
+
+    # Tokenize the description into lowercase keywords for scoring.
+    keywords = re.findall(r"[a-z0-9]+", description.lower())
+
+    results = []
+    for listing in listings:
+        # Price filter (inclusive) — skip when no ceiling given.
+        if max_price is not None and listing["price"] > max_price:
+            continue
+
+        # Size filter — case-insensitive substring, e.g. "M" matches "S/M".
+        # Skipped entirely when size is None.
+        if size is not None and size.strip().lower() not in listing["size"].lower():
+            continue
+
+        # Relevance score: how many description keywords appear in the
+        # listing's combined searchable text (title + description + tags).
+        haystack = " ".join(
+            [listing["title"], listing["description"], " ".join(listing["style_tags"])]
+        ).lower()
+        score = sum(1 for kw in keywords if kw in haystack)
+
+        if score > 0:
+            results.append((score, listing))
+
+    # Highest score first; sorted() is stable so dataset order breaks ties.
+    results.sort(key=lambda pair: pair[0], reverse=True)
+    return [listing for _, listing in results]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -100,8 +142,44 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
 
     Before writing code, fill in the Tool 2 section of planning.md.
     """
-    # Replace this with your implementation
-    return ""
+    item_line = (
+        f"{new_item['title']} — {new_item['category']}, "
+        f"colors: {', '.join(new_item['colors'])}, "
+        f"style: {', '.join(new_item['style_tags'])}."
+    )
+
+    items = wardrobe.get("items", [])
+
+    if not items:
+        # No wardrobe — give general styling advice for the item alone.
+        prompt = (
+            "You are a thrift-fashion stylist. The user is considering this "
+            f"second-hand find:\n\n{item_line}\n\n"
+            "They haven't shared their wardrobe yet. Suggest 1-2 complete outfits "
+            "around this piece, naming the kinds of items that pair well (tops, "
+            "bottoms, shoes, layers), the colors that work, and the overall vibe. "
+            "Note that this advice is based on the item alone since no wardrobe was "
+            "provided. Keep it to a short, friendly paragraph or two."
+        )
+    else:
+        # Format the user's wardrobe so the model can name specific pieces.
+        wardrobe_lines = "\n".join(
+            f"- {it['name']} ({it['category']}; "
+            f"colors: {', '.join(it['colors'])}; "
+            f"style: {', '.join(it['style_tags'])})"
+            for it in items
+        )
+        prompt = (
+            "You are a thrift-fashion stylist. The user is considering this "
+            f"second-hand find:\n\n{item_line}\n\n"
+            f"Here is their current wardrobe:\n{wardrobe_lines}\n\n"
+            "Suggest 1-2 complete outfits that pair the new item with SPECIFIC "
+            "pieces from their wardrobe (refer to them by name). For each outfit, "
+            "give a one-line styling rationale (the vibe, how to wear it). Keep it "
+            "short and friendly."
+        )
+
+    return _chat(prompt, temperature=0.7)
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
