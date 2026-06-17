@@ -175,3 +175,76 @@ def test_create_fit_card_empty_outfit_returns_error_string(monkeypatch):
         assert "Faded Band Tee" in result   # item details offered instead
     # The guard returns before ever calling the LLM.
     assert captured == []
+
+
+# ── Planning loop: agent.run_agent ───────────────────────────────────────────
+#
+# The loop calls the two LLM-backed tools, so we patch them in agent's namespace
+# to keep these tests offline and deterministic. We assert on control flow and
+# state, not on caption wording.
+
+import agent
+from agent import run_agent, _parse_query
+
+
+def _patch_agent_llm(monkeypatch):
+    """Stub suggest_outfit and create_fit_card as imported into agent.py."""
+    monkeypatch.setattr(agent, "suggest_outfit", lambda item, wardrobe: "FAKE OUTFIT")
+    monkeypatch.setattr(agent, "create_fit_card", lambda outfit, item: "FAKE CARD")
+
+
+def test_parse_query_extracts_size_and_price():
+    parsed = _parse_query("vintage graphic tee under $30 size M")
+    assert parsed["size"] == "M"
+    assert parsed["max_price"] == 30.0
+    assert "tee" in parsed["description"]
+    # The price/size phrases are stripped out of the description.
+    assert "$30" not in parsed["description"]
+    assert "size M" not in parsed["description"]
+
+
+def test_parse_query_no_filters():
+    parsed = _parse_query("denim jacket")
+    assert parsed["size"] is None
+    assert parsed["max_price"] is None
+    assert parsed["description"] == "denim jacket"
+
+
+def test_run_agent_happy_path(monkeypatch):
+    """Full success path: all fields populated, no error."""
+    _patch_agent_llm(monkeypatch)
+    session = run_agent("vintage graphic tee under $50", get_example_wardrobe())
+    assert session["error"] is None
+    assert session["selected_item"] is not None
+    assert session["outfit_suggestion"] == "FAKE OUTFIT"
+    assert session["fit_card"] == "FAKE CARD"
+
+
+def test_run_agent_no_results_early_exit(monkeypatch):
+    """No-results gate: error set, LLM tools never reached."""
+    called = {"suggest": False, "card": False}
+
+    def boom_suggest(item, wardrobe):
+        called["suggest"] = True
+        return "should not happen"
+
+    def boom_card(outfit, item):
+        called["card"] = True
+        return "should not happen"
+
+    monkeypatch.setattr(agent, "suggest_outfit", boom_suggest)
+    monkeypatch.setattr(agent, "create_fit_card", boom_card)
+
+    session = run_agent("designer ballgown size XXS under $5", get_example_wardrobe())
+    assert session["error"] is not None
+    assert session["outfit_suggestion"] is None
+    assert session["fit_card"] is None
+    assert called == {"suggest": False, "card": False}
+
+
+def test_run_agent_empty_wardrobe_still_completes(monkeypatch):
+    """Empty wardrobe is not an error — loop runs to completion."""
+    _patch_agent_llm(monkeypatch)
+    session = run_agent("vintage graphic tee under $50", get_empty_wardrobe())
+    assert session["error"] is None
+    assert session["fit_card"] == "FAKE CARD"
